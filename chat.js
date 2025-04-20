@@ -1,3 +1,6 @@
+// Import tmi.js
+import { Client } from 'tmi.js';
+
 // Store the client object and states
 let tmiClient = null;
 let botEnabled = false;
@@ -29,7 +32,7 @@ botToggle.addEventListener('change', (e) => {
 
 // Handle connect/disconnect
 connectButton.addEventListener('click', () => {
-  if (tmiClient && tmiClient.readyState() === 'OPEN') {
+  if (tmiClient && tmiClient.readyState === 'OPEN') {
     disconnectFromChat();
   } else {
     connectToChat();
@@ -45,8 +48,8 @@ function connectToChat() {
   }
 
   try {
-    // Create new client with tmi.js
-    tmiClient = new tmi.Client({
+    // Create new client
+    tmiClient = new Client({
       connection: {
         secure: true,
         reconnect: true
@@ -67,7 +70,7 @@ function connectToChat() {
         statusDiv.textContent = 'Failed to connect: ' + error.message;
       });
 
-    // Setup event handlers
+    // Setup event handlers 
     tmiClient.on('connected', () => {
       statusDiv.className = 'status connected';
       statusDiv.textContent = `Connected to ${channel}'s chat`;
@@ -95,7 +98,7 @@ function connectToChat() {
         
         // Check if enough time has passed since last bot message (at least 10 seconds)
         if (Date.now() - lastMessageTime > 10000) {
-          // Random chance to respond (20%) 
+          // Random chance to respond (20%)
           if (Math.random() < 0.2) {
             try {
               const botResponse = await generateBotResponse();
