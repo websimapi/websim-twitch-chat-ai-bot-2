@@ -1,5 +1,5 @@
-// Store the TMI client globally
-let client = null;
+// Store the client object and states
+let tmiClient = null;
 let botEnabled = false;
 let lastMessageTime = Date.now();
 let conversationHistory = [];
@@ -7,7 +7,7 @@ let volume = 0.5;
 
 // Initialize elements
 const channelInput = document.getElementById('channel-input');
-const connectButton = document.getElementById('connect-btn');
+const connectButton = document.getElementById('connect-btn'); 
 const chatBox = document.getElementById('chat-box');
 const statusDiv = document.getElementById('status');
 const botToggle = document.getElementById('bot-enabled');
@@ -29,7 +29,7 @@ botToggle.addEventListener('change', (e) => {
 
 // Handle connect/disconnect
 connectButton.addEventListener('click', () => {
-  if (client && client.readyState() === 'OPEN') {
+  if (tmiClient && tmiClient.readyState() === 'OPEN') {
     disconnectFromChat();
   } else {
     connectToChat();
@@ -46,7 +46,7 @@ function connectToChat() {
 
   try {
     // Create new client with tmi.js
-    client = new tmi.Client({
+    tmiClient = new tmi.Client({
       connection: {
         secure: true,
         reconnect: true
@@ -55,7 +55,7 @@ function connectToChat() {
     });
 
     // Handle connection
-    client.connect()
+    tmiClient.connect()
       .then(() => {
         statusDiv.className = 'status connected';
         statusDiv.textContent = `Connected to ${channel}'s chat`;
@@ -68,25 +68,25 @@ function connectToChat() {
       });
 
     // Setup event handlers
-    client.on('connected', () => {
+    tmiClient.on('connected', () => {
       statusDiv.className = 'status connected';
       statusDiv.textContent = `Connected to ${channel}'s chat`;
       connectButton.textContent = 'Disconnect';
     });
 
-    client.on('disconnected', () => {
+    tmiClient.on('disconnected', () => {
       statusDiv.className = 'status disconnected';
       statusDiv.textContent = 'Disconnected from chat';
       connectButton.textContent = 'Connect';
     });
 
-    client.on('message', async (channel, tags, message, self) => {
+    tmiClient.on('message', async (channel, tags, message, self) => {
       addChatMessage(tags['display-name'], message, tags);
       
       if (botEnabled && !self) {
         // Add message to conversation history
         conversationHistory.push({
-          role: "user",
+          role: "user", 
           content: `${tags['display-name']}: ${message}`
         });
         
@@ -95,12 +95,12 @@ function connectToChat() {
         
         // Check if enough time has passed since last bot message (at least 10 seconds)
         if (Date.now() - lastMessageTime > 10000) {
-          // Random chance to respond (20%)
+          // Random chance to respond (20%) 
           if (Math.random() < 0.2) {
             try {
               const botResponse = await generateBotResponse();
               if (botResponse) {
-                client.say(channel, botResponse);
+                tmiClient.say(channel, botResponse);
                 speak(botResponse);
                 addChatMessage('AI Bot', botResponse, { 'bot': true });
                 lastMessageTime = Date.now();
@@ -150,9 +150,9 @@ function speak(text) {
 }
 
 function disconnectFromChat() {
-  if (client) {
-    client.disconnect();
-    client = null;
+  if (tmiClient) {
+    tmiClient.disconnect();
+    tmiClient = null;
     statusDiv.className = 'status disconnected';
     statusDiv.textContent = 'Disconnected from chat';
     connectButton.textContent = 'Connect';
