@@ -1,5 +1,5 @@
-// Import from local tmi.js file 
-import { Client } from 'tmi.js';
+// Import tmi.js - note we're importing the default export
+import tmi from 'tmi.js';
 
 // Store the client object and states
 let tmiClient = null;
@@ -47,8 +47,8 @@ function connectToChat() {
     return;
   }
 
-  // Create new client
-  tmiClient = new Client({
+  // Create new client using imported tmi
+  tmiClient = new tmi.Client({
     connection: {
       secure: true,
       reconnect: true
