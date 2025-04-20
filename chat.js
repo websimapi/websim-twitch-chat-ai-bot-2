@@ -44,59 +44,80 @@ function connectToChat() {
     return;
   }
 
-  // Create new client
-  client = new window.tmi.Client({
-    connection: {
-      secure: true,
-      reconnect: true
-    },
-    channels: [channel]
-  });
+  try {
+    // Create new client with tmi.js
+    client = new tmi.Client({
+      connection: {
+        secure: true,
+        reconnect: true
+      },
+      channels: [channel]
+    });
 
-  // Handle connection
-  client.connect().catch(console.error);
-
-  // Setup event handlers
-  client.on('connected', () => {
-    statusDiv.className = 'status connected';
-    statusDiv.textContent = `Connected to ${channel}'s chat`;
-    connectButton.textContent = 'Disconnect';
-  });
-
-  client.on('disconnected', () => {
-    statusDiv.className = 'status disconnected';
-    statusDiv.textContent = 'Disconnected from chat';
-    connectButton.textContent = 'Connect';
-  });
-
-  client.on('message', async (channel, tags, message, self) => {
-    addChatMessage(tags['display-name'], message, tags);
-    
-    if (botEnabled && !self) {
-      // Add message to conversation history
-      conversationHistory.push({
-        role: "user",
-        content: `${tags['display-name']}: ${message}`
+    // Handle connection
+    client.connect()
+      .then(() => {
+        statusDiv.className = 'status connected';
+        statusDiv.textContent = `Connected to ${channel}'s chat`;
+        connectButton.textContent = 'Disconnect';
+      })
+      .catch(error => {
+        console.error('Connection error:', error);
+        statusDiv.className = 'status disconnected';
+        statusDiv.textContent = 'Failed to connect: ' + error.message;
       });
+
+    // Setup event handlers
+    client.on('connected', () => {
+      statusDiv.className = 'status connected';
+      statusDiv.textContent = `Connected to ${channel}'s chat`;
+      connectButton.textContent = 'Disconnect';
+    });
+
+    client.on('disconnected', () => {
+      statusDiv.className = 'status disconnected';
+      statusDiv.textContent = 'Disconnected from chat';
+      connectButton.textContent = 'Connect';
+    });
+
+    client.on('message', async (channel, tags, message, self) => {
+      addChatMessage(tags['display-name'], message, tags);
       
-      // Keep only last 10 messages for context
-      conversationHistory = conversationHistory.slice(-10);
-      
-      // Check if enough time has passed since last bot message (at least 10 seconds)
-      if (Date.now() - lastMessageTime > 10000) {
-        // Random chance to respond (20%)
-        if (Math.random() < 0.2) {
-          const botResponse = await generateBotResponse();
-          if (botResponse) {
-            client.say(channel, botResponse);
-            speak(botResponse);
-            addChatMessage('AI Bot', botResponse, { 'bot': true });
-            lastMessageTime = Date.now();
+      if (botEnabled && !self) {
+        // Add message to conversation history
+        conversationHistory.push({
+          role: "user",
+          content: `${tags['display-name']}: ${message}`
+        });
+        
+        // Keep only last 10 messages for context
+        conversationHistory = conversationHistory.slice(-10);
+        
+        // Check if enough time has passed since last bot message (at least 10 seconds)
+        if (Date.now() - lastMessageTime > 10000) {
+          // Random chance to respond (20%)
+          if (Math.random() < 0.2) {
+            try {
+              const botResponse = await generateBotResponse();
+              if (botResponse) {
+                client.say(channel, botResponse);
+                speak(botResponse);
+                addChatMessage('AI Bot', botResponse, { 'bot': true });
+                lastMessageTime = Date.now();
+              }
+            } catch (error) {
+              console.error('Error generating bot response:', error);
+            }
           }
         }
       }
-    }
-  });
+    });
+
+  } catch (error) {
+    console.error('Error initializing chat:', error);
+    statusDiv.className = 'status disconnected';
+    statusDiv.textContent = 'Failed to initialize chat: ' + error.message;
+  }
 }
 
 async function generateBotResponse() {
@@ -132,6 +153,9 @@ function disconnectFromChat() {
   if (client) {
     client.disconnect();
     client = null;
+    statusDiv.className = 'status disconnected';
+    statusDiv.textContent = 'Disconnected from chat';
+    connectButton.textContent = 'Connect';
   }
 }
 
