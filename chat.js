@@ -7,6 +7,8 @@ let volume = 0.5;
 let newMessagesReceived = false;
 let isPondering = false;
 let messagesQueue = []; // Queue to collect messages while the bot is pondering
+let processedMessageIds = new Set(); // Track processed message IDs
+let longTermMemory = []; // Store important interactions for long-term context
 
 // Initialize elements
 const channelInput = document.getElementById('channel-input');
@@ -88,14 +90,31 @@ function connectToChat() {
       
       if (botEnabled && !self) {
         try {
-          // Add message to conversation history
+          // Generate a unique identifier for this message
+          const messageId = `${tags.id || tags['user-id']}_${Date.now()}`;
+          
+          // Add message to conversation history with user info
           conversationHistory.push({
             role: "user",
-            content: `${tags['display-name']}: ${message}`
+            content: `${tags['display-name']}: ${message}`,
+            messageId: messageId,
+            username: tags['display-name'],
+            timestamp: Date.now()
           });
           
-          // Keep only last 10 messages for context
-          conversationHistory = conversationHistory.slice(-10);
+          // Keep only last 10 messages for recent context
+          if (conversationHistory.length > 10) {
+            // Before removing, check if any important messages should be saved to long-term memory
+            const oldestMessage = conversationHistory.shift();
+            if (oldestMessage.isImportant) {
+              // If marked as important, save to long-term memory
+              longTermMemory.push(oldestMessage);
+              // Keep long-term memory manageable (max 20 items)
+              if (longTermMemory.length > 20) {
+                longTermMemory.shift();
+              }
+            }
+          }
           
           // Signal that new messages have been received
           newMessagesReceived = true;
@@ -103,7 +122,9 @@ function connectToChat() {
           // Add to messages queue for processing
           messagesQueue.push({
             username: tags['display-name'],
-            message: message
+            message: message,
+            messageId: messageId,
+            userId: tags['user-id']
           });
         } catch (error) {
           console.error('Error processing message:', error);
@@ -117,6 +138,18 @@ function connectToChat() {
   }
 }
 
+// Check if any message in the queue refers to a previously processed message
+function isReferringToPreviousMessage(message) {
+  // Simple check - see if any usernames from processed messages appear in this new message
+  for (const msgId of processedMessageIds) {
+    const msgInfo = conversationHistory.find(msg => msg.messageId === msgId);
+    if (msgInfo && message.toLowerCase().includes(msgInfo.username.toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Separate function to check if the bot should respond
 function checkForBotResponse() {
   if (!botEnabled) return;
@@ -126,52 +159,106 @@ function checkForBotResponse() {
   
   // Check if we have new messages, enough time has passed, and bot isn't already pondering
   if (newMessagesReceived && timeElapsed > 7000 && !isPondering && messagesQueue.length > 0) {
-    isPondering = true;
-    newMessagesReceived = false;
+    // Filter out messages the bot has already directly responded to
+    // unless someone else is referring to them
+    const newMessages = messagesQueue.filter(msg => {
+      const alreadyProcessed = processedMessageIds.has(msg.messageId);
+      const isReferenced = isReferringToPreviousMessage(msg.message);
+      
+      // Keep messages that are either new (not processed) or being referenced by others
+      return !alreadyProcessed || isReferenced;
+    });
     
-    // Visual indicator that the bot is thinking (optional)
-    console.log("Bot is pondering a response...");
-    
-    // Generate response after a short "pondering" delay (500-1500ms)
-    const ponderTime = Math.random() * 1000 + 500;
-    setTimeout(() => {
-      generateBotResponse()
-        .then(botResponse => {
-          if (botResponse && client) {
-            try {
-              const channel = client.getChannels()[0];
-              client.say(channel, botResponse)
-                .catch(err => console.error('Error sending message to channel:', err));
-              
-              speak(botResponse);
-              addChatMessage('AI Bot', botResponse, { 'bot': true });
-              lastMessageTime = Date.now();
-              messagesQueue = []; // Clear the messages queue
-            } catch (err) {
-              console.error('Error in bot response handling:', err);
+    // Only proceed if there are valid messages to respond to
+    if (newMessages.length > 0) {
+      isPondering = true;
+      newMessagesReceived = false;
+      
+      // Visual indicator that the bot is thinking (optional)
+      console.log("Bot is pondering a response...");
+      
+      // Generate response after a short "pondering" delay (500-1500ms)
+      const ponderTime = Math.random() * 1000 + 500;
+      setTimeout(() => {
+        generateBotResponse(newMessages)
+          .then(botResponse => {
+            if (botResponse && client) {
+              try {
+                const channel = client.getChannels()[0];
+                client.say(channel, botResponse)
+                  .catch(err => console.error('Error sending message to channel:', err));
+                
+                speak(botResponse);
+                addChatMessage('AI Bot', botResponse, { 'bot': true });
+                lastMessageTime = Date.now();
+                
+                // Mark all messages in this batch as processed
+                newMessages.forEach(msg => {
+                  processedMessageIds.add(msg.messageId);
+                });
+                
+                // Add bot's response to conversation history
+                conversationHistory.push({
+                  role: "assistant",
+                  content: botResponse,
+                  timestamp: Date.now()
+                });
+                
+                // Clear the messages queue of processed messages
+                messagesQueue = messagesQueue.filter(msg => !processedMessageIds.has(msg.messageId));
+              } catch (err) {
+                console.error('Error in bot response handling:', err);
+              }
             }
-          }
-          isPondering = false;
-        })
-        .catch(err => {
-          console.error('Error generating response:', err);
-          isPondering = false;
-        });
-    }, ponderTime);
+            isPondering = false;
+          })
+          .catch(err => {
+            console.error('Error generating response:', err);
+            isPondering = false;
+          });
+      }, ponderTime);
+    } else {
+      // No new messages to respond to
+      newMessagesReceived = false;
+    }
   }
   
   // Continue checking every second
   setTimeout(checkForBotResponse, 1000);
 }
 
-async function generateBotResponse() {
+async function generateBotResponse(newMessages) {
   try {
-    const context = botContext.value || "You are a friendly and helpful Twitch chat bot.";
+    const botConfigContext = botContext.value || "You are a friendly and helpful Twitch chat bot.";
+    
+    // Get the most recent message to determine who we're responding to
+    const primaryMessage = newMessages[newMessages.length - 1];
+    const primaryUsername = primaryMessage.username;
     
     // Combine recent chat messages for additional context
-    const recentMessagesContext = messagesQueue
+    const recentMessagesContext = newMessages
       .map(msg => `${msg.username}: ${msg.message}`)
       .join("\n");
+      
+    // Format the long-term memory context
+    const longTermContext = longTermMemory.length > 0 
+      ? longTermMemory.map(mem => `${mem.username}: ${mem.content}`).join("\n")
+      : "No long-term memory yet.";
+    
+    // Organize the context with clear section labels
+    const structuredContext = `
+=== BOT CONFIGURATION ===
+${botConfigContext}
+
+=== RECENT CHAT CONTEXT ===
+${recentMessagesContext}
+
+=== LONG-TERM MEMORY ===
+${longTermContext}
+
+You are responding to ${primaryUsername}. Keep responses conversational and engaging.
+Don't use emotes unless they were used in chat. If someone refers to a past message, it's okay to address it.
+`;
       
     // Add error handling for the API call
     try {
@@ -179,11 +266,24 @@ async function generateBotResponse() {
         messages: [
           {
             role: "system",
-            content: `${context} Keep responses concise and natural, under 200 characters. The following is recent chat context:\n\n${recentMessagesContext}\n\nPonder your response thoughtfully, but keep it conversational and engaging. Don't use emotes unless mentioned in chat.`
+            content: structuredContext
           },
-          ...conversationHistory
+          ...conversationHistory.slice(-5).map(msg => ({
+            role: msg.role,
+            content: msg.content
+          }))
         ]
       });
+
+      // Mark important responses for long-term memory
+      if (completion.content.includes("important") || 
+          recentMessagesContext.includes("remember") || 
+          recentMessagesContext.includes("don't forget")) {
+        const lastUserMsg = conversationHistory.find(msg => msg.messageId === primaryMessage.messageId);
+        if (lastUserMsg) {
+          lastUserMsg.isImportant = true;
+        }
+      }
 
       return completion.content;
     } catch (apiError) {
