@@ -49,54 +49,72 @@ function connectToChat() {
     return;
   }
 
-  // Create new client
-  client = new window.tmi.Client({
-    connection: {
-      secure: true,
-      reconnect: true
-    },
-    channels: [channel]
-  });
+  // Create new client using window.tmi.Client
+  try {
+    client = new window.tmi.Client({
+      connection: {
+        secure: true,
+        reconnect: true
+      },
+      channels: [channel]
+    });
 
-  // Handle connection
-  client.connect().catch(console.error);
+    // Handle connection
+    client.connect()
+      .then(() => {
+        console.log('Successfully connected to Twitch');
+      })
+      .catch(err => {
+        console.error('Error connecting to Twitch:', err);
+        statusDiv.className = 'status disconnected';
+        statusDiv.textContent = `Connection error: ${err.message}`;
+      });
 
-  // Setup event handlers
-  client.on('connected', () => {
-    statusDiv.className = 'status connected';
-    statusDiv.textContent = `Connected to ${channel}'s chat`;
-    connectButton.textContent = 'Disconnect';
-  });
+    // Setup event handlers
+    client.on('connected', () => {
+      statusDiv.className = 'status connected';
+      statusDiv.textContent = `Connected to ${channel}'s chat`;
+      connectButton.textContent = 'Disconnect';
+    });
 
-  client.on('disconnected', () => {
+    client.on('disconnected', () => {
+      statusDiv.className = 'status disconnected';
+      statusDiv.textContent = 'Disconnected from chat';
+      connectButton.textContent = 'Connect';
+    });
+
+    client.on('message', async (channel, tags, message, self) => {
+      addChatMessage(tags['display-name'], message, tags);
+      
+      if (botEnabled && !self) {
+        try {
+          // Add message to conversation history
+          conversationHistory.push({
+            role: "user",
+            content: `${tags['display-name']}: ${message}`
+          });
+          
+          // Keep only last 10 messages for context
+          conversationHistory = conversationHistory.slice(-10);
+          
+          // Signal that new messages have been received
+          newMessagesReceived = true;
+          
+          // Add to messages queue for processing
+          messagesQueue.push({
+            username: tags['display-name'],
+            message: message
+          });
+        } catch (error) {
+          console.error('Error processing message:', error);
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error setting up Twitch client:', error);
     statusDiv.className = 'status disconnected';
-    statusDiv.textContent = 'Disconnected from chat';
-    connectButton.textContent = 'Connect';
-  });
-
-  client.on('message', async (channel, tags, message, self) => {
-    addChatMessage(tags['display-name'], message, tags);
-    
-    if (botEnabled && !self) {
-      // Add message to conversation history
-      conversationHistory.push({
-        role: "user",
-        content: `${tags['display-name']}: ${message}`
-      });
-      
-      // Keep only last 10 messages for context
-      conversationHistory = conversationHistory.slice(-10);
-      
-      // Signal that new messages have been received
-      newMessagesReceived = true;
-      
-      // Add to messages queue for processing
-      messagesQueue.push({
-        username: tags['display-name'],
-        message: message
-      });
-    }
-  });
+    statusDiv.textContent = `Error: ${error.message}`;
+  }
 }
 
 // Separate function to check if the bot should respond
@@ -116,17 +134,29 @@ function checkForBotResponse() {
     
     // Generate response after a short "pondering" delay (500-1500ms)
     const ponderTime = Math.random() * 1000 + 500;
-    setTimeout(async () => {
-      const botResponse = await generateBotResponse();
-      if (botResponse) {
-        const channel = client.getChannels()[0];
-        client.say(channel, botResponse);
-        speak(botResponse);
-        addChatMessage('AI Bot', botResponse, { 'bot': true });
-        lastMessageTime = Date.now();
-        messagesQueue = []; // Clear the messages queue
-      }
-      isPondering = false;
+    setTimeout(() => {
+      generateBotResponse()
+        .then(botResponse => {
+          if (botResponse && client) {
+            try {
+              const channel = client.getChannels()[0];
+              client.say(channel, botResponse)
+                .catch(err => console.error('Error sending message to channel:', err));
+              
+              speak(botResponse);
+              addChatMessage('AI Bot', botResponse, { 'bot': true });
+              lastMessageTime = Date.now();
+              messagesQueue = []; // Clear the messages queue
+            } catch (err) {
+              console.error('Error in bot response handling:', err);
+            }
+          }
+          isPondering = false;
+        })
+        .catch(err => {
+          console.error('Error generating response:', err);
+          isPondering = false;
+        });
     }, ponderTime);
   }
   
@@ -143,17 +173,24 @@ async function generateBotResponse() {
       .map(msg => `${msg.username}: ${msg.message}`)
       .join("\n");
       
-    const completion = await websim.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: `${context} Keep responses concise and natural, under 200 characters. The following is recent chat context:\n\n${recentMessagesContext}\n\nPonder your response thoughtfully, but keep it conversational and engaging. Don't use emotes unless mentioned in chat.`
-        },
-        ...conversationHistory
-      ]
-    });
+    // Add error handling for the API call
+    try {
+      const completion = await websim.chat.completions.create({
+        messages: [
+          {
+            role: "system",
+            content: `${context} Keep responses concise and natural, under 200 characters. The following is recent chat context:\n\n${recentMessagesContext}\n\nPonder your response thoughtfully, but keep it conversational and engaging. Don't use emotes unless mentioned in chat.`
+          },
+          ...conversationHistory
+        ]
+      });
 
-    return completion.content;
+      return completion.content;
+    } catch (apiError) {
+      console.error('API error when generating bot response:', apiError);
+      // Return a fallback message when API fails
+      return null;
+    }
   } catch (error) {
     console.error('Error generating bot response:', error);
     return null;
@@ -162,51 +199,70 @@ async function generateBotResponse() {
 
 function speak(text) {
   if ('speechSynthesis' in window) {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.volume = volume;
-    speechSynthesis.speak(utterance);
+    try {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.volume = volume;
+      speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.error('Error with speech synthesis:', error);
+    }
   }
 }
 
 function disconnectFromChat() {
   if (client) {
-    client.disconnect();
-    client = null;
+    try {
+      client.disconnect()
+        .then(() => {
+          console.log('Successfully disconnected from Twitch');
+          client = null;
+        })
+        .catch(err => {
+          console.error('Error disconnecting from Twitch:', err);
+        });
+    } catch (error) {
+      console.error('Error during disconnect:', error);
+      client = null;
+    }
   }
 }
 
 function addChatMessage(username, message, tags) {
-  const messageDiv = document.createElement('div');
-  messageDiv.className = 'chat-message';
-  if (tags.bot) {
-    messageDiv.className += ' bot-message';
-  }
+  try {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'chat-message';
+    if (tags.bot) {
+      messageDiv.className += ' bot-message';
+    }
 
-  // Add timestamp
-  const timestamp = new Date().toLocaleTimeString();
-  const timestampSpan = document.createElement('span');
-  timestampSpan.className = 'timestamp';
-  timestampSpan.textContent = timestamp;
-  messageDiv.appendChild(timestampSpan);
+    // Add timestamp
+    const timestamp = new Date().toLocaleTimeString();
+    const timestampSpan = document.createElement('span');
+    timestampSpan.className = 'timestamp';
+    timestampSpan.textContent = timestamp;
+    messageDiv.appendChild(timestampSpan);
 
-  // Add username
-  const usernameSpan = document.createElement('span');
-  usernameSpan.className = 'username';
-  usernameSpan.textContent = username;
-  messageDiv.appendChild(usernameSpan);
+    // Add username
+    const usernameSpan = document.createElement('span');
+    usernameSpan.className = 'username';
+    usernameSpan.textContent = username;
+    messageDiv.appendChild(usernameSpan);
 
-  // Add message
-  const messageText = document.createElement('span');
-  messageText.textContent = `: ${message}`;
-  messageDiv.appendChild(messageText);
+    // Add message
+    const messageText = document.createElement('span');
+    messageText.textContent = `: ${message}`;
+    messageDiv.appendChild(messageText);
 
-  // Add to chat box and scroll to bottom
-  chatBox.appendChild(messageDiv);
-  chatBox.scrollTop = chatBox.scrollHeight;
+    // Add to chat box and scroll to bottom
+    chatBox.appendChild(messageDiv);
+    chatBox.scrollTop = chatBox.scrollHeight;
 
-  // Limit messages to prevent memory issues
-  while (chatBox.children.length > 500) {
-    chatBox.removeChild(chatBox.firstChild);
+    // Limit messages to prevent memory issues
+    while (chatBox.children.length > 500) {
+      chatBox.removeChild(chatBox.firstChild);
+    }
+  } catch (error) {
+    console.error('Error adding chat message to UI:', error);
   }
 }
 
@@ -215,4 +271,9 @@ channelInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') {
     connectButton.click();
   }
+});
+
+// Global error handler for unhandled promise rejections
+window.addEventListener('unhandledrejection', function(event) {
+  console.error('Unhandled promise rejection:', event.reason);
 });
