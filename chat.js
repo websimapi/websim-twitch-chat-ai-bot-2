@@ -20,6 +20,7 @@ const statusDiv = document.getElementById('status');
 const botToggle = document.getElementById('bot-enabled');
 const botContext = document.getElementById('bot-context');
 const volumeControl = document.getElementById('volume-control');
+const stopSpeechButton = document.getElementById('stop-speech');
 
 // Setup volume control
 volumeControl.addEventListener('input', (e) => {
@@ -404,6 +405,16 @@ Don't use emotes unless they were used in chat. If someone refers to a past mess
     return null;
   }
 }
+
+// Handle stop speech button
+stopSpeechButton.addEventListener('click', () => {
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+    isSpeaking = false;
+    speechQueue = [];
+    console.log('Speech stopped');
+  }
+});
 
 function disconnectFromChat() {
   if (client) {
