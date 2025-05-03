@@ -9,6 +9,8 @@ let isPondering = false;
 let messagesQueue = []; // Queue to collect messages while the bot is pondering
 let processedMessageIds = new Set(); // Track processed message IDs
 let longTermMemory = []; // Store important interactions for long-term context
+let isSpeaking = false; // Track if TTS is currently speaking
+let speechQueue = []; // Queue for TTS sentences
 
 // Initialize elements
 const channelInput = document.getElementById('channel-input');
@@ -227,6 +229,112 @@ function checkForBotResponse() {
   setTimeout(checkForBotResponse, 1000);
 }
 
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  
+  // Cancel any ongoing speech if requested to speak something new
+  if (isSpeaking) {
+    speechSynthesis.cancel();
+    isSpeaking = false;
+  }
+  
+  try {
+    // Split text into sentences
+    const sentences = splitIntoSentences(text);
+    
+    // Add sentences to speech queue
+    speechQueue = [...speechQueue, ...sentences];
+    
+    // Start processing the speech queue if not already speaking
+    if (!isSpeaking) {
+      processSpeechQueue();
+    }
+  } catch (error) {
+    console.error('Error with speech synthesis:', error);
+  }
+}
+
+// Split text into natural sentences
+function splitIntoSentences(text) {
+  if (!text) return [];
+  
+  // Match sentence endings (., !, ?) followed by space or end of string
+  // But be careful with common abbreviations, decimals, etc.
+  const sentenceRegex = /[.!?]+(?=\s|$)/g;
+  
+  // First, handle cases like "Dr.", "Mr.", etc. by temporarily replacing them
+  const preserveAbbreviations = text
+    .replace(/Mr\./g, "Mr#DOT#")
+    .replace(/Mrs\./g, "Mrs#DOT#")
+    .replace(/Dr\./g, "Dr#DOT#")
+    .replace(/Ph\.D\./g, "PhD#DOT#")
+    .replace(/etc\./g, "etc#DOT#")
+    .replace(/vs\./g, "vs#DOT#")
+    .replace(/i\.e\./g, "ie#DOT#")
+    .replace(/e\.g\./g, "eg#DOT#");
+  
+  // Split by the regex
+  let sentences = [];
+  let lastIndex = 0;
+  let match;
+  
+  // Find all sentence boundaries
+  while ((match = sentenceRegex.exec(preserveAbbreviations)) !== null) {
+    // Extract the sentence and restore the original punctuation
+    const sentence = preserveAbbreviations
+      .substring(lastIndex, match.index + match[0].length)
+      .replace(/#DOT#/g, ".");
+    
+    sentences.push(sentence.trim());
+    lastIndex = match.index + match[0].length;
+  }
+  
+  // Add the last part if it exists
+  if (lastIndex < preserveAbbreviations.length) {
+    const lastSentence = preserveAbbreviations
+      .substring(lastIndex)
+      .replace(/#DOT#/g, ".");
+    
+    if (lastSentence.trim()) {
+      sentences.push(lastSentence.trim());
+    }
+  }
+  
+  // If no sentences were found (no punctuation), treat the whole text as one sentence
+  if (sentences.length === 0 && text.trim()) {
+    sentences.push(text.trim());
+  }
+  
+  return sentences;
+}
+
+// Process the speech queue one sentence at a time
+function processSpeechQueue() {
+  if (speechQueue.length === 0) {
+    isSpeaking = false;
+    return;
+  }
+  
+  isSpeaking = true;
+  const sentence = speechQueue.shift();
+  
+  const utterance = new SpeechSynthesisUtterance(sentence);
+  utterance.volume = volume;
+  
+  // When this sentence is done, proceed to the next one
+  utterance.onend = () => {
+    processSpeechQueue();
+  };
+  
+  // If there's an error, continue with the next sentence
+  utterance.onerror = (error) => {
+    console.error('TTS error:', error);
+    processSpeechQueue();
+  };
+  
+  speechSynthesis.speak(utterance);
+}
+
 async function generateBotResponse(newMessages) {
   try {
     const botConfigContext = botContext.value || "You are a friendly and helpful Twitch chat bot.";
@@ -297,21 +405,16 @@ Don't use emotes unless they were used in chat. If someone refers to a past mess
   }
 }
 
-function speak(text) {
-  if ('speechSynthesis' in window) {
-    try {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.volume = volume;
-      speechSynthesis.speak(utterance);
-    } catch (error) {
-      console.error('Error with speech synthesis:', error);
-    }
-  }
-}
-
 function disconnectFromChat() {
   if (client) {
     try {
+      // Cancel any ongoing speech when disconnecting
+      if (isSpeaking) {
+        speechSynthesis.cancel();
+        isSpeaking = false;
+        speechQueue = [];
+      }
+      
       client.disconnect()
         .then(() => {
           console.log('Successfully disconnected from Twitch');
